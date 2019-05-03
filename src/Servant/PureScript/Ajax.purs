@@ -7,62 +7,63 @@ module Servant.PureScript.Ajax where
 
 import Prelude
 
+import Data.List.NonEmpty (toList)
+import Data.Argonaut.Core (Json)
 import Control.Monad.Error.Class (class MonadError, catchError, throwError)
-import Data.Argonaut.Decode.Generic.Rep (class DecodeRep, genericDecodeJson)
 import Data.Either (Either(..))
 import Data.Generic.Rep (class Generic)
 import Effect.Aff (Aff, message)
 import Effect.Aff.Class (class MonadAff, liftAff)
-import Network.HTTP.Affjax (AffjaxRequest, AffjaxResponse, affjax)
-import Network.HTTP.Affjax.Response as Response
+import Foreign.Generic (genericDecodeJSON, defaultOptions)
+import Foreign.Generic.Class (class GenericDecode)
+import Foreign (renderForeignError, MultipleErrors)
+import Affjax (Request, Response, request, printResponseFormatError)
+import Affjax as Affjax
+import Affjax.ResponseFormat as ResponseFormat
 import Servant.PureScript.JsUtils (unsafeToString)
+import Control.Monad.Except (runExcept)
 
 
-newtype AjaxError res
+newtype AjaxError
   = AjaxError
-    { request     :: AffjaxRequest
-    , description :: ErrorDescription res
+    { request     :: Request Unit
+    , description :: ErrorDescription
     }
 
-data ErrorDescription res
-  = UnexpectedHTTPStatus (AffjaxResponse res)
-  | ParsingError String
-  | DecodingError String
+data ErrorDescription
+  = DecodingError String
   | ConnectionError String
+  | ResponseFormatError String
 
 
-makeAjaxError :: forall res. AffjaxRequest -> ErrorDescription res -> AjaxError res
+makeAjaxError :: Request Unit -> ErrorDescription -> AjaxError
 makeAjaxError req desc = 
   AjaxError 
     { request : req
     , description : desc
     }
 
-runAjaxError :: forall res. AjaxError res -> { request :: AffjaxRequest, description :: ErrorDescription res }
+runAjaxError :: AjaxError -> { request :: Request Unit, description :: ErrorDescription }
 runAjaxError (AjaxError err) = err
 
-errorToString :: forall res. AjaxError res -> String
+errorToString :: AjaxError -> String
 errorToString = unsafeToString
 
-requestToString :: AffjaxRequest -> String
+requestToString :: Request Json -> String
 requestToString = unsafeToString
 
-responseToString :: forall res. AffjaxResponse res -> String
+responseToString :: forall res. Response res -> String
 responseToString = unsafeToString
 
 
 -- | Do an affjax call but report Aff exceptions in our own MonadError
-ajax :: forall m res rep. Generic res rep => DecodeRep rep => MonadError (AjaxError res) m => MonadAff m
-        => AffjaxRequest -> m (AffjaxResponse res)
+ajax :: forall m res rep. Generic res rep => GenericDecode rep => MonadError AjaxError m => MonadAff m
+        => Request Unit -> m (Response res)
 ajax req = do
-  jsonResponse <- liftWithError $ affjax Response.json req
-  decoded <- toDecodingError $ genericDecodeJson jsonResponse.response
-  pure
-    { status: jsonResponse.status
-    , statusText: jsonResponse.statusText
-    , headers: jsonResponse.headers
-    , response: decoded
-    }
+  response <- liftWithError $ request (req { responseFormat = ResponseFormat.string })
+  responseBody <- toFormatError response.body
+  decoded <- toDecodingError <<< runExcept $ genericDecodeJSON defaultOptions responseBody
+  pure $ response { body = decoded }
   where
     liftWithError :: forall a. Aff a -> m a
     liftWithError action = do
@@ -78,7 +79,12 @@ ajax req = do
         Left err -> throwError $ makeAjaxError req $ ConnectionError err
         Right v  -> pure v
 
-    toDecodingError :: forall a. Either String a -> m a
+    toFormatError :: forall a. Either Affjax.ResponseFormatError a -> m a
+    toFormatError r = case r of
+        Left err -> throwError $ makeAjaxError req $ ResponseFormatError (printResponseFormatError err)
+        Right v  -> pure v
+
+    toDecodingError :: forall a. Either MultipleErrors a -> m a
     toDecodingError r = case r of
-        Left err -> throwError $ makeAjaxError req $ DecodingError err
+        Left err -> throwError $ makeAjaxError req $ DecodingError (show (toList (map renderForeignError err)))
         Right v  -> pure v

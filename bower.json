@@ -29,9 +29,9 @@
     "purescript-effect": "^2.0.0",
     "purescript-aff": "^5.0.0",
     "purescript-exceptions": "^4.0.0",
-    "purescript-web-xhr": "^2.0.0",
-    "purescript-argonaut-generic": "https://github.com/CarstenKoenig/purescript-argonaut-generic.git#6402a87c8a35b4028429d270ca23af4eefd7e192",
-    "purescript-affjax": "^6.0.0"
+    "purescript-web-xhr": "^3.0.0",
+    "purescript-foreign-generic": "^9.0.0",
+    "purescript-affjax": "^9.0.0"
   },
   "devDependencies": {
     "purescript-psci-support": "^4.0.0"
