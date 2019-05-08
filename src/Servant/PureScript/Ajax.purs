@@ -7,26 +7,29 @@ module Servant.PureScript.Ajax where
 
 import Prelude
 
-import Data.List.NonEmpty (toList)
-import Data.Argonaut.Core (Json)
-import Control.Monad.Error.Class (class MonadError, catchError, throwError)
-import Data.Either (Either(..))
-import Data.Generic.Rep (class Generic)
-import Data.MediaType.Common (applicationJSON)
-import Effect.Aff (Aff, message)
-import Effect.Aff.Class (class MonadAff, liftAff)
-import Foreign.Generic (genericDecodeJSON)
-import Foreign.Generic.Class (class GenericDecode)
-import Foreign.Generic.Types (Options)
-import Foreign (renderForeignError, MultipleErrors, F, readInt)
-import Foreign.JSON (decodeJSONWith)
 import Affjax (Request, Response, request, printResponseFormatError)
 import Affjax as Affjax
-import Affjax.ResponseFormat as ResponseFormat
 import Affjax.RequestHeader (RequestHeader(..))
+import Affjax.ResponseFormat as ResponseFormat
+import Control.Monad.Error.Class (class MonadError, catchError, throwError)
+import Control.Monad.Except (runExcept, mapExcept)
+import Data.Argonaut.Core (Json)
+import Data.Array ((..), zipWith, length)
+import Data.Bifunctor (lmap)
+import Data.Either (Either(..))
+import Data.Generic.Rep (class Generic)
+import Data.List.NonEmpty (toList)
+import Data.MediaType.Common (applicationJSON)
+import Data.Traversable (sequence)
+import Effect.Aff (Aff, message)
+import Effect.Aff.Class (class MonadAff, liftAff)
+import Foreign (renderForeignError, MultipleErrors, F, readInt, readArray, Foreign, ForeignError(..))
+import Foreign.Generic (genericDecode)
+import Foreign.Generic.Class (class GenericDecode)
+import Foreign.Generic.Types (Options)
+import Foreign.JSON (decodeJSONWith)
 import Servant.PureScript.JsUtils (unsafeToString)
 import Servant.PureScript.Settings (SPSettings_(..), SPSettingsDecodeJson_(..))
-import Control.Monad.Except (runExcept)
 
 
 newtype AjaxError
@@ -61,13 +64,24 @@ responseToString :: forall res. Response res -> String
 responseToString = unsafeToString
 
 class FromJSON a where
-  fromJSON :: Options -> String -> F a
+  fromJSON :: Options -> Foreign -> F a
 
 instance intFromJSON :: FromJSON Int where
-  fromJSON _ = decodeJSONWith readInt
+  fromJSON _ = readInt
+
+else instance unitFromJSON :: FromJSON Unit where
+  fromJSON _ _ = pure unit
+
+else instance arrayFromJSON :: FromJSON a => FromJSON (Array a) where
+  fromJSON opts = readArray >=> readElements where
+    readElements :: Array Foreign -> F (Array a)
+    readElements arr = sequence (zipWith readElement (0 .. length arr) arr)
+
+    readElement :: Int -> Foreign -> F a
+    readElement i value = mapExcept (lmap (map (ErrorAtIndex i))) (fromJSON opts value)
 
 else instance genericFromJSON :: (Generic a rep, GenericDecode rep) => FromJSON a where
-  fromJSON = genericDecodeJSON
+  fromJSON = genericDecode
 
 -- | Do an affjax call but report Aff exceptions in our own MonadError
 ajax :: forall m res params. FromJSON res => MonadError AjaxError m => MonadAff m
@@ -76,7 +90,7 @@ ajax (SPSettings_ settings) req = do
   let headers = [ContentType applicationJSON] <> req.headers
   response <- liftWithError $ request (req { responseFormat = ResponseFormat.string, headers = headers })
   responseBody <- toFormatError response.body
-  decoded <- toDecodingError <<< runExcept $ fromJSON decodeOptions responseBody
+  decoded <- toDecodingError <<< runExcept $ decodeJSONWith (fromJSON decodeOptions) responseBody
   pure $ response { body = decoded }
   where
     decodeOptions :: Options
