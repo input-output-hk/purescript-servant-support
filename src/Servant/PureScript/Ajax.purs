@@ -19,15 +19,18 @@ import Data.Bifunctor (lmap)
 import Data.Either (Either(..))
 import Data.Generic.Rep (class Generic)
 import Data.List.NonEmpty (toList)
+import Data.Maybe (Maybe(..))
 import Data.MediaType.Common (applicationJSON)
 import Data.Traversable (sequence)
 import Effect.Aff (Aff, message)
 import Effect.Aff.Class (class MonadAff, liftAff)
-import Foreign (renderForeignError, MultipleErrors, F, readInt, readArray, Foreign, ForeignError(..))
+import Foreign (F, Foreign, ForeignError(..), MultipleErrors, fail, readArray, readInt, readString, renderForeignError)
 import Foreign.Generic (genericDecode)
 import Foreign.Generic.Class (class GenericDecode)
 import Foreign.Generic.Types (Options)
+import Foreign.Internal (readObject)
 import Foreign.JSON (decodeJSONWith)
+import Foreign.Object as O
 import Servant.PureScript.JsUtils (unsafeToString)
 import Servant.PureScript.Settings (SPSettings_(..), SPSettingsDecodeJson_(..))
 
@@ -69,8 +72,21 @@ class FromJSON a where
 instance intFromJSON :: FromJSON Int where
   fromJSON _ = readInt
 
+else instance stringFromJSON :: FromJSON String where
+  fromJSON _ = readString
+
 else instance unitFromJSON :: FromJSON Unit where
   fromJSON _ _ = pure unit
+
+else instance eitherFromJSON :: (FromJSON a, FromJSON b) => FromJSON (Either a b) where
+  fromJSON opts f = do
+    o <- readObject f
+    let mr = O.lookup "Right" o
+    let ml = O.lookup "Left" o
+    case mr, ml of
+      (Just a), _ -> Right <$> fromJSON opts a
+      _, (Just b) -> Left <$> fromJSON opts b
+      _, _ -> fail (ForeignError "Object is not an Either a b")
 
 else instance arrayFromJSON :: FromJSON a => FromJSON (Array a) where
   fromJSON opts = readArray >=> readElements where
