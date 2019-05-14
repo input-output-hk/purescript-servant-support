@@ -117,10 +117,10 @@ else instance eitherFromJSON :: (FromJSON a, FromJSON b) => FromJSON (Either a b
 else instance arrayFromJSON :: FromJSON a => FromJSON (Array a) where
   fromJSON opts = readArray >=> readElements where
     readElements :: Array Foreign -> F (Array a)
-    readElements arr = sequence (zipWith readElement (0 .. length arr) arr)
+    readElements arr = sequence $ mapWithIndex readElement arr
 
     readElement :: Int -> Foreign -> F a
-    readElement i value = mapExcept (lmap (map (ErrorAtIndex i))) (fromJSON opts value)
+    readElement i value = withExcept (map (ErrorAtIndex i)) (fromJSON opts value)
 
 else instance genericFromJSON :: (Generic a rep, GenericDecode rep) => FromJSON a where
   fromJSON = genericDecode
