@@ -12,10 +12,9 @@ import Affjax as Affjax
 import Affjax.RequestHeader (RequestHeader(..))
 import Affjax.ResponseFormat as ResponseFormat
 import Control.Monad.Error.Class (class MonadError, catchError, throwError)
-import Control.Monad.Except (runExcept, mapExcept)
+import Control.Monad.Except (runExcept, withExcept)
 import Data.Argonaut.Core (Json)
-import Data.Array ((..), zipWith, length)
-import Data.Bifunctor (lmap)
+import Data.Array (mapWithIndex)
 import Data.Either (Either(..))
 import Data.Generic.Rep (class Generic)
 import Data.List.NonEmpty (toList)
@@ -24,13 +23,15 @@ import Data.MediaType.Common (applicationJSON)
 import Data.Traversable (sequence)
 import Effect.Aff (Aff, message)
 import Effect.Aff.Class (class MonadAff, liftAff)
-import Foreign (F, Foreign, ForeignError(..), MultipleErrors, fail, readArray, readInt, readString, renderForeignError)
-import Foreign.Generic (genericDecode)
-import Foreign.Generic.Class (class GenericDecode)
+import Foreign (F, Foreign, ForeignError(..), MultipleErrors, fail, readArray, readInt, readString, renderForeignError, unsafeToForeign)
+import Foreign.Class (encode)
+import Foreign.Generic (genericDecode, genericEncode)
+import Foreign.Generic.Class (class GenericDecode, class GenericEncode)
 import Foreign.Generic.Types (Options)
 import Foreign.Internal (readObject)
 import Foreign.JSON (parseJSON)
 import Foreign.Object as O
+import Foreign.Object as Object
 import Servant.PureScript.JsUtils (unsafeToString)
 
 
@@ -64,6 +65,32 @@ requestToString = unsafeToString
 
 responseToString :: forall res. Response res -> String
 responseToString = unsafeToString
+
+------------------------------------------------------------
+
+class ToJSON a where
+  toJSON :: Options -> a -> Foreign
+
+instance toJSONInt :: ToJSON Int where
+  toJSON _ = encode
+
+else instance toJSONString :: ToJSON String where
+  toJSON _ = encode
+
+else instance toJSONUnit :: ToJSON Unit where
+  toJSON _ = encode
+
+else instance eitherToJSON :: (ToJSON a, ToJSON b) => ToJSON (Either a b) where
+  toJSON options (Left l)  = unsafeToForeign $ Object.singleton "Left"  $ toJSON options l
+  toJSON options (Right r) = unsafeToForeign $ Object.singleton "Right" $ toJSON options r
+
+else instance arrayToJSON :: ToJSON a => ToJSON (Array a) where
+  toJSON options xs  = unsafeToForeign $ map (toJSON options) xs
+
+else instance genericToJSON :: (Generic a rep, GenericEncode rep) => ToJSON a where
+  toJSON = genericEncode
+
+------------------------------------------------------------
 
 class FromJSON a where
   fromJSON :: Options -> Foreign -> F a

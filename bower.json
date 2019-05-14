@@ -34,6 +34,7 @@
     "purescript-affjax": "^9.0.0"
   },
   "devDependencies": {
-    "purescript-psci-support": "^4.0.0"
+    "purescript-psci-support": "^4.0.0",
+    "purescript-test-unit": "^15.0.0"
   }
 }
