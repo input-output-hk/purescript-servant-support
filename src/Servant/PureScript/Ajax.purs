@@ -48,8 +48,8 @@ data ErrorDescription
 
 
 makeAjaxError :: Request Unit -> ErrorDescription -> AjaxError
-makeAjaxError req desc = 
-  AjaxError 
+makeAjaxError req desc =
+  AjaxError
     { request : req
     , description : desc
     }
