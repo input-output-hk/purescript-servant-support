@@ -29,10 +29,9 @@ import Foreign.Generic (genericDecode)
 import Foreign.Generic.Class (class GenericDecode)
 import Foreign.Generic.Types (Options)
 import Foreign.Internal (readObject)
-import Foreign.JSON (decodeJSONWith)
+import Foreign.JSON (parseJSON)
 import Foreign.Object as O
 import Servant.PureScript.JsUtils (unsafeToString)
-import Servant.PureScript.Settings (SPSettings_(..), SPSettingsDecodeJson_(..))
 
 
 newtype AjaxError
@@ -100,18 +99,15 @@ else instance genericFromJSON :: (Generic a rep, GenericDecode rep) => FromJSON 
   fromJSON = genericDecode
 
 -- | Do an affjax call but report Aff exceptions in our own MonadError
-ajax :: forall m res params. FromJSON res => MonadError AjaxError m => MonadAff m
-        => SPSettings_ params -> Request Unit -> m (Response res)
-ajax (SPSettings_ settings) req = do
+ajax :: forall m res . MonadError AjaxError m => MonadAff m
+        => (Foreign -> F res) -> Request Unit -> m (Response res)
+ajax decoder req = do
   let headers = [ContentType applicationJSON] <> req.headers
   response <- liftWithError $ request (req { responseFormat = ResponseFormat.string, headers = headers })
   responseBody <- toFormatError response.body
-  decoded <- toDecodingError <<< runExcept $ decodeJSONWith (fromJSON decodeOptions) responseBody
+  decoded <- toDecodingError $ runExcept $ parseJSON responseBody >>= decoder
   pure $ response { body = decoded }
   where
-    decodeOptions :: Options
-    decodeOptions = let (SPSettingsDecodeJson_ options) = settings.decodeJson in options
-
     liftWithError :: forall a. Aff a -> m a
     liftWithError action = do
       res <- liftAff $ toEither action

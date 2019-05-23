@@ -4,8 +4,13 @@
 --}
 module Servant.PureScript.Settings where
 
-import Foreign.Generic (genericEncodeJSON, defaultOptions)
 import Data.Generic.Rep (class Generic)
+import Data.Lens (Lens')
+import Data.Lens.Iso.Newtype (_Newtype)
+import Data.Lens.Record (prop)
+import Data.Newtype (class Newtype)
+import Data.Symbol (SProxy(..))
+import Foreign.Generic (genericEncodeJSON, defaultOptions)
 import Foreign.Generic.Class (class GenericEncode)
 import Foreign.Generic.Types (Options)
 import Prelude (identity, (<<<), ($))
@@ -15,7 +20,11 @@ import Servant.PureScript.JsUtils (encodeUriComponent)
 -- https://github.com/purescript/purescript/issues/1957
 
 newtype SPSettingsEncodeJson_ = SPSettingsEncodeJson_ Options
+derive instance newtypeSPSettingsEncodeJson_ :: Newtype SPSettingsEncodeJson_ _
+
 newtype SPSettingsDecodeJson_ = SPSettingsDecodeJson_ Options
+derive instance newtypeSPSettingsDecodeJson_ :: Newtype SPSettingsDecodeJson_ _
+
 newtype SPSettingsToUrlPiece_ = SPSettingsToUrlPiece_ (forall a. ToUrlPiece a => a -> URLPiece)
 newtype SPSettingsEncodeHeader_ = SPSettingsEncodeHeader_ (forall a. ToUrlPiece a => a -> URLPiece)
 
@@ -26,6 +35,8 @@ newtype SPSettings_ params = SPSettings_
   , encodeHeader :: SPSettingsEncodeHeader_
   , params :: params
   }
+
+derive instance newtypeSPSettings_ :: Newtype (SPSettings_ params) _
 
 type URLPiece = String
 
@@ -58,3 +69,12 @@ defaultSettings params = SPSettings_
   , encodeHeader : SPSettingsEncodeHeader_ gDefaultEncodeHeader
   , params : params
   }
+
+_encodeJson :: forall params. Lens' (SPSettings_ params) Options
+_encodeJson = _Newtype <<< prop (SProxy :: SProxy "encodeJson") <<< _Newtype
+
+_decodeJson :: forall params. Lens' (SPSettings_ params) Options
+_decodeJson = _Newtype <<< prop (SProxy :: SProxy "decodeJson") <<< _Newtype
+
+_params :: forall params. Lens' (SPSettings_ params) params
+_params = _Newtype <<< prop (SProxy :: SProxy "params")
