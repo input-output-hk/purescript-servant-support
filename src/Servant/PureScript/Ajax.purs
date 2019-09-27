@@ -26,9 +26,8 @@ import Effect.Aff (Aff, message)
 import Effect.Aff.Class (class MonadAff, liftAff)
 import Foreign (F, Foreign, ForeignError(..), MultipleErrors, fail, readArray, readInt, readString, renderForeignError)
 import Foreign.Generic (genericDecode)
-import Foreign.Generic.Class (class GenericDecode)
-import Foreign.Generic.Types (Options)
-import Foreign.Internal (readObject)
+import Foreign.Generic.Class (class GenericDecode, Options)
+import Foreign.Generic.Internal (readObject)
 import Foreign.JSON (parseJSON)
 import Foreign.Object as O
 import Servant.PureScript.JsUtils (unsafeToString)
@@ -47,8 +46,8 @@ data ErrorDescription
 
 
 makeAjaxError :: Request Unit -> ErrorDescription -> AjaxError
-makeAjaxError req desc = 
-  AjaxError 
+makeAjaxError req desc =
+  AjaxError
     { request : req
     , description : desc
     }

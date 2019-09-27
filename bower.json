@@ -21,17 +21,11 @@
     "output"
   ],
   "dependencies": {
-    "purescript-console": "^4.1.0",
-    "purescript-prelude": "^4.0.1",
-    "purescript-either": "^4.0.0",
-    "purescript-foldable-traversable": "^4.0.0",
-    "purescript-generics-rep": "^6.0.0",
-    "purescript-effect": "^2.0.0",
-    "purescript-aff": "^5.0.0",
-    "purescript-exceptions": "^4.0.0",
-    "purescript-web-xhr": "^3.0.0",
-    "purescript-foreign-generic": "^9.0.0",
-    "purescript-affjax": "^9.0.0"
+    "purescript-prelude": "^4.1.1",
+    "purescript-foldable-traversable": "^4.1.1",
+    "purescript-affjax": "^9.0.1",
+    "purescript-foreign-generic": "^10.0.0",
+    "purescript-profunctor-lenses": "^6.2.0"
   },
   "devDependencies": {
     "purescript-psci-support": "^4.0.0"
