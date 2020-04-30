@@ -4,15 +4,15 @@
 --}
 module Servant.PureScript.Settings where
 
-import Data.Generic.Rep (class Generic)
 import Data.Lens (Lens')
 import Data.Lens.Iso.Newtype (_Newtype)
 import Data.Lens.Record (prop)
-import Data.Newtype (class Newtype)
+import Data.Newtype (class Newtype, unwrap)
+import Data.Show (show)
 import Data.Symbol (SProxy(..))
-import Foreign.Generic (genericEncodeJSON, defaultOptions)
-import Foreign.Generic.Class (class GenericEncode, Options)
-import Prelude (identity, (<<<), ($))
+import Foreign.Generic (defaultOptions)
+import Foreign.Generic.Class (Options)
+import Prelude (identity, (<<<))
 import Servant.PureScript.JsUtils (encodeUriComponent)
 
 -- encodeJSON, decodeJson, toURLPiece have to be wrapped in newtype. See:
@@ -45,8 +45,17 @@ class ToUrlPiece a where
 instance stringToUrlPiece :: ToUrlPiece String where
   toUrlPiece = identity
 
-else instance genericRepToUrlPiece :: (Generic a rep, GenericEncode rep) => ToUrlPiece a where
-  toUrlPiece = genericEncodeJSON $ defaultOptions { unwrapSingleConstructors = true }
+instance intToUrlPiece :: ToUrlPiece Int where
+  toUrlPiece = show
+
+instance numberToUrlPiece :: ToUrlPiece Number where
+  toUrlPiece = show
+
+instance booleanToUrlPiece :: ToUrlPiece Boolean where
+  toUrlPiece = show
+
+instance newtypeToUrlPiece :: (Newtype s a, ToUrlPiece a) => ToUrlPiece s where
+  toUrlPiece value = unwrap $ toUrlPiece value
 
 -- | Just use the robust JSON format.
 gDefaultToURLPiece :: forall a. ToUrlPiece a => a -> URLPiece
