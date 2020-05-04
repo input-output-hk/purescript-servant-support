@@ -7,7 +7,7 @@ module Servant.PureScript.Ajax where
 
 import Prelude
 
-import Affjax (Request, Response, request, printResponseFormatError)
+import Affjax (Request, Response, request, printError)
 import Affjax as Affjax
 import Affjax.RequestHeader (RequestHeader(..))
 import Affjax.ResponseFormat as ResponseFormat
@@ -103,9 +103,9 @@ ajax :: forall m res . MonadError AjaxError m => MonadAff m
 ajax decoder req = do
   let headers = [ContentType applicationJSON] <> req.headers
   response <- liftWithError $ request (req { responseFormat = ResponseFormat.string, headers = headers })
-  responseBody <- toFormatError response.body
-  decoded <- toDecodingError $ runExcept $ parseJSON responseBody >>= decoder
-  pure $ response { body = decoded }
+  response' <- toFormatError response
+  decoded <- toDecodingError $ runExcept $ parseJSON response'.body >>= decoder
+  pure $ response' { body = decoded }
   where
     liftWithError :: forall a. Aff a -> m a
     liftWithError action = do
@@ -121,9 +121,9 @@ ajax decoder req = do
         Left err -> throwError $ makeAjaxError req $ ConnectionError err
         Right v  -> pure v
 
-    toFormatError :: forall a. Either Affjax.ResponseFormatError a -> m a
+    toFormatError :: forall a. Either Affjax.Error a -> m a
     toFormatError r = case r of
-        Left err -> throwError $ makeAjaxError req $ ResponseFormatError (printResponseFormatError err)
+        Left err -> throwError $ makeAjaxError req $ ResponseFormatError (printError err)
         Right v  -> pure v
 
     toDecodingError :: forall a. Either MultipleErrors a -> m a
