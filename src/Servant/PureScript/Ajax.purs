@@ -14,12 +14,12 @@ import Affjax.ResponseFormat as ResponseFormat
 import Control.Monad.Error.Class (class MonadError, catchError, throwError)
 import Control.Monad.Except (runExcept, mapExcept)
 import Data.Argonaut.Core (Json)
-import Data.Array ((..), zipWith, length)
+import Data.Array (find, length, zipWith, (..))
 import Data.Bifunctor (lmap)
 import Data.Either (Either(..))
 import Data.Generic.Rep (class Generic)
 import Data.List.NonEmpty (toList)
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), isJust)
 import Data.MediaType.Common (applicationJSON)
 import Data.Traversable (sequence)
 import Effect.Aff (Aff, message)
@@ -101,7 +101,7 @@ else instance genericFromJSON :: (Generic a rep, GenericDecode rep) => FromJSON 
 ajax :: forall m res . MonadError AjaxError m => MonadAff m
         => (Foreign -> F res) -> Request Unit -> m (Response res)
 ajax decoder req = do
-  let headers = [ContentType applicationJSON] <> req.headers
+  let headers = if hasContentType req.headers then req.headers else [ContentType applicationJSON] <> req.headers
   response <- liftWithError $ request (req { responseFormat = ResponseFormat.string, headers = headers })
   response' <- toFormatError response
   decoded <- toDecodingError $ runExcept $ parseJSON response'.body >>= decoder
@@ -130,3 +130,10 @@ ajax decoder req = do
     toDecodingError r = case r of
         Left err -> throwError $ makeAjaxError req $ DecodingError (show (toList (map renderForeignError err)))
         Right v  -> pure v
+
+    hasContentType :: Array RequestHeader -> Boolean
+    hasContentType hs = isJust $ find isContentType hs
+
+    isContentType :: RequestHeader -> Boolean
+    isContentType (ContentType _) = true
+    isContentType _ = false
