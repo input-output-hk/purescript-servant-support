@@ -11,7 +11,8 @@ import Affjax (Request, Response, request, printError)
 import Affjax as Affjax
 import Affjax.RequestHeader (RequestHeader(..))
 import Affjax.ResponseFormat as ResponseFormat
-import Control.Monad.Error.Class (class MonadError, catchError, throwError)
+import Affjax.StatusCode (StatusCode(..))
+import Control.Monad.Error.Class (class MonadError, throwError, try)
 import Control.Monad.Except (runExcept, mapExcept)
 import Data.Argonaut.Core (Json)
 import Data.Array (find, length, zipWith, (..))
@@ -24,6 +25,7 @@ import Data.MediaType.Common (applicationJSON)
 import Data.Traversable (sequence)
 import Effect.Aff (Aff, message)
 import Effect.Aff.Class (class MonadAff, liftAff)
+import Effect.Exception (Error)
 import Foreign (F, Foreign, ForeignError(..), MultipleErrors, fail, readArray, readInt, readString, renderForeignError)
 import Foreign.Generic (genericDecode)
 import Foreign.Generic.Class (class GenericDecode, Options)
@@ -42,6 +44,8 @@ newtype AjaxError
 data ErrorDescription
   = DecodingError String
   | ConnectionError String
+  | NotFound
+  | ResponseError StatusCode String
   | ResponseFormatError String
 
 
@@ -102,30 +106,10 @@ ajax :: forall m res . MonadError AjaxError m => MonadAff m
         => (Foreign -> F res) -> Request Unit -> m (Response res)
 ajax decoder req = do
   let headers = if hasContentType req.headers then req.headers else [ContentType applicationJSON] <> req.headers
-  response <- liftWithError $ request (req { responseFormat = ResponseFormat.string, headers = headers })
-  response' <- toFormatError response
-  decoded <- toDecodingError $ runExcept $ parseJSON response'.body >>= decoder
-  pure $ response' { body = decoded }
+  response <- tryRequest $ request $ req { responseFormat = ResponseFormat.string, headers = headers }
+  decoded <- toDecodingError $ runExcept $ parseJSON response.body >>= decoder
+  pure $ response { body = decoded }
   where
-    liftWithError :: forall a. Aff a -> m a
-    liftWithError action = do
-      res <- liftAff $ toEither action
-      toAjaxError res
-
-    toEither :: forall a. Aff a -> Aff (Either String a)
-    toEither action = catchError (Right <$> action) $ \e ->
-      pure $ Left (message e)
-
-    toAjaxError :: forall a. Either String a -> m a
-    toAjaxError r = case r of
-        Left err -> throwError $ makeAjaxError req $ ConnectionError err
-        Right v  -> pure v
-
-    toFormatError :: forall a. Either Affjax.Error a -> m a
-    toFormatError r = case r of
-        Left err -> throwError $ makeAjaxError req $ ResponseFormatError (printError err)
-        Right v  -> pure v
-
     toDecodingError :: forall a. Either MultipleErrors a -> m a
     toDecodingError r = case r of
         Left err -> throwError $ makeAjaxError req $ DecodingError (show (toList (map renderForeignError err)))
@@ -137,3 +121,25 @@ ajax decoder req = do
     isContentType :: RequestHeader -> Boolean
     isContentType (ContentType _) = true
     isContentType _ = false
+
+    tryRequest :: Aff (Either Affjax.Error (Response String)) -> m (Response String)
+    tryRequest action = do
+       response <- liftAff $ try action
+       toMonadError $ handleServerErrors response
+
+    handleServerErrors :: Either Error (Either Affjax.Error (Response String)) -> Either AjaxError (Response String)
+    handleServerErrors =
+      lmap (makeAjaxError req) <<<
+       case _ of
+         Left jsError -> Left $ ConnectionError $ message jsError
+         Right (Left affjaxError) -> Left $ ResponseFormatError $ printError affjaxError
+         Right (Right (response@{status: status@(StatusCode statusCode), body})) ->
+          if between 200 299 statusCode
+          then pure response
+          else Left $ if statusCode == 404
+                      then NotFound
+                      else ResponseError status body
+
+toMonadError :: forall m e a. MonadError e m => Either e a -> m a
+toMonadError (Left err) = throwError err
+toMonadError (Right value) = pure value
