@@ -6,29 +6,29 @@
 module Servant.PureScript.Affjax where
 
 import Prelude
-
-import Control.Monad.Aff (Aff, Canceler(Canceler), makeAff)
-import Control.Monad.Aff.Class (liftAff, class MonadAff)
-import Control.Monad.Eff (Eff)
-import Control.Monad.Eff.Exception (message, Error)
+import Affjax (Response)
+import Affjax.ResponseHeader (ResponseHeader(..))
 import Control.Monad.Error.Class (throwError, catchError, class MonadError)
-import DOM.XHR.Types (XMLHttpRequest)
+import Data.Argonaut.Decode (JsonDecodeError)
 import Data.Either (Either(Left, Right))
 import Data.Function.Uncurried (Fn5, runFn5, Fn4, runFn4)
 import Data.Maybe (Maybe(..))
 import Data.Monoid (mempty)
 import Data.Nullable (Nullable, toNullable)
-import Network.HTTP.Affjax (AffjaxResponse, AJAX)
-import Network.HTTP.ResponseHeader (ResponseHeader, responseHeader)
+import Effect (Effect)
+import Effect.Aff (Aff, Canceler(Canceler), makeAff)
+import Effect.Aff.Class (liftAff, class MonadAff)
+import Effect.Exception (message, Error)
+import Web.XHR.XMLHttpRequest (XMLHttpRequest)
 
 newtype AjaxError = AjaxError
   { request :: AjaxRequest
   , description :: ErrorDescription
   }
 
-data ErrorDescription = UnexpectedHTTPStatus (AffjaxResponse String)
+data ErrorDescription = UnexpectedHTTPStatus (Response String)
                       | ParsingError String
-                      | DecodingError String
+                      | DecodingError JsonDecodeError
                       | ConnectionError String
 
 type AjaxRequest =
@@ -56,7 +56,7 @@ errorToString = unsafeToString
 requestToString :: AjaxRequest -> String
 requestToString = unsafeToString
 
-responseToString :: AffjaxResponse String -> String
+responseToString :: Response String -> String
 responseToString = unsafeToString
 
 defaultRequest :: AjaxRequest
@@ -75,14 +75,14 @@ defaultRequest = {
 
 -- | Do an affjax call but report Aff exceptions in our own MonadError
 affjax
-  :: forall eff m
+  :: forall m
    . MonadError AjaxError m
-  => MonadAff (ajax :: AJAX | eff) m
+  => MonadAff m
   => AjaxRequest
-  -> m (AffjaxResponse String)
+  -> m (Response String)
 affjax req = toAjaxError <=< liftAff <<< toEither $ makeAff \cb -> ajax req (cb <<< Left) (cb <<< Right)
   where
-    toEither :: forall a. Aff (ajax :: AJAX | eff) a -> Aff (ajax :: AJAX | eff) (Either String a)
+    toEither :: forall a. Aff a -> Aff (Either String a)
     toEither action = catchError (Right <$> action) $ \e ->
      pure $ Left (message e)
 
@@ -96,28 +96,28 @@ affjax req = toAjaxError <=< liftAff <<< toEither $ makeAff \cb -> ajax req (cb 
 
 ajax :: forall e.
      AjaxRequest
-  -> (Error -> Eff (ajax :: AJAX | e) Unit)
-  -> (AffjaxResponse String -> Eff (ajax :: AJAX | e) Unit)
-  -> Eff (ajax :: AJAX | e) (Canceler (ajax :: AJAX | e))
-ajax req eb cb = runFn5 _ajax responseHeader req cancelAjax eb cb
+  -> (Error -> Effect  Unit)
+  -> (Response String -> Effect Unit)
+  -> Effect Canceler
+ajax req eb cb = runFn5 _ajax ResponseHeader req cancelAjax eb cb
 
 
 foreign import _ajax
   :: forall e. Fn5 (String -> String -> ResponseHeader)
                AjaxRequest
-               (XMLHttpRequest -> Canceler (ajax :: AJAX | e))
-               (Error -> Eff (ajax :: AJAX | e) Unit)
-               (AffjaxResponse String -> Eff (ajax :: AJAX | e) Unit)
-               (Eff (ajax :: AJAX | e) (Canceler (ajax :: AJAX | e)))
+               (XMLHttpRequest String -> Canceler)
+               (Error -> Effect Unit)
+               (Response String -> Effect Unit)
+               (Effect Canceler)
 
-cancelAjax :: forall e. XMLHttpRequest -> Canceler (ajax :: AJAX | e)
+cancelAjax :: forall a e. XMLHttpRequest a -> Canceler
 cancelAjax xhr = Canceler \err -> makeAff (\cb -> mempty <$ runFn4 _cancelAjax xhr err (cb <<< Left) (const <<< cb $ Right unit))
 
 foreign import _cancelAjax
-  :: forall e. Fn4 XMLHttpRequest
+  :: forall e a. Fn4 (XMLHttpRequest a)
                    Error
-                   (Error -> Eff (ajax :: AJAX | e) Unit)
-                   (Boolean -> Eff (ajax :: AJAX | e) Unit)
-                   (Eff (ajax :: AJAX | e) Unit)
+                   (Error -> Effect Unit)
+                   (Boolean -> Effect Unit)
+                   (Effect Unit)
 
 foreign import unsafeToString :: forall obj. obj -> String
