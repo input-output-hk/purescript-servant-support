@@ -6,3 +6,5 @@
 /src/.webpack.js
 /setupPath.sh
 /.idea
+/.spago
+.psc-ide-port
