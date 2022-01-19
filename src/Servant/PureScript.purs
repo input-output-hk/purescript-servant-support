@@ -14,13 +14,16 @@ import Control.Monad.State (StateT)
 import Control.Monad.Trans.Class (class MonadTrans, lift)
 import Control.Monad.Writer (WriterT)
 import Data.Argonaut
-  ( Json
+  ( class EncodeJson
+  , Json
   , JsonDecodeError
+  , encodeJson
   , printJsonDecodeError
   , stringify
   , stringifyWithIndent
   )
 import Data.Array ((:))
+import Data.Array as A
 import Data.Array.NonEmpty (NonEmptyArray)
 import Data.Bifunctor (lmap)
 import Data.BigInt (BigInt)
@@ -48,10 +51,23 @@ import Type.Proxy (Proxy)
 
 foreign import encodeURIComponent :: String -> String
 
+data QueryItem a = QueryItem String a
+
 -- | Class for types that can be encoded as a peice of a URI.
 -- | The resulting string should URL encoded.
 class ToURLPiece a where
   toURLPiece :: a -> String
+
+instance ToURLPiece (QueryItem String) where
+  toURLPiece (QueryItem name value) = name <> "=" <> value
+
+else instance EncodeJson a => ToURLPiece (QueryItem a) where
+  toURLPiece (QueryItem name value) = toURLPiece
+    (QueryItem name $ encodeJson value)
+
+else instance ToURLPiece a => ToURLPiece (QueryItem a) where
+  toURLPiece (QueryItem name value) = toURLPiece
+    (QueryItem name $ toURLPiece value)
 
 instance ToURLPiece String where
   toURLPiece = encodeURIComponent
@@ -75,6 +91,9 @@ instance ToURLPiece Json where
   toURLPiece = toURLPiece <<< stringify
 
 instance ToURLPiece a => ToURLPiece (Array a) where
+  toURLPiece = toURLPieceFoldable
+
+instance ToURLPiece a => ToURLPiece (Either e a) where
   toURLPiece = toURLPieceFoldable
 
 instance ToURLPiece a => ToURLPiece (Maybe a) where
