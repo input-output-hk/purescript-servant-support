@@ -22,7 +22,7 @@
                 purs
                 spago
                 spago2nix
-                purty
+                purs-tidy
                 purescript-language-server
               ];
             };

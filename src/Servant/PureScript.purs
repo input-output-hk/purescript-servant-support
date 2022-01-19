@@ -1,27 +1,59 @@
-module Servant.PureScript (class ToURLPiece, toURLPiece, AjaxError, ErrorDescription(..), printAjaxError) where
+module Servant.PureScript
+  ( class ToURLPiece
+  , toURLPiece
+  , AjaxError
+  , ErrorDescription(..)
+  , printAjaxError
+  ) where
 
 import Prelude
 
 import Affjax (Error, Request, Response, printError)
-import Data.Argonaut.Core (Json, stringify, stringifyWithIndent)
-import Data.Argonaut.Decode (JsonDecodeError, printJsonDecodeError)
-import Data.Argonaut.Encode (class EncodeJson, encodeJson)
+import Data.Argonaut
+  ( Json
+  , JsonDecodeError
+  , printJsonDecodeError
+  , stringify
+  , stringifyWithIndent
+  )
 import Data.Array ((:))
+import Data.BigInt (BigInt)
+import Data.BigInt as BigInt
+import Data.Int (decimal)
+import Data.Int as Int
 import Data.Newtype (unwrap)
+import Data.Number.Format as Number
 import Data.String (Pattern(..), joinWith, split)
+import Data.UUID (UUID)
+import Data.UUID as UUID
+
+foreign import encodeURIComponent :: String -> String
 
 class ToURLPiece a where
   toURLPiece :: a -> String
 
-instance toURLPieceString :: ToURLPiece String where
-  toURLPiece = identity
-else instance toURLPieceAny :: (EncodeJson a) => ToURLPiece a where
-  toURLPiece = stringify <<< encodeJson
+instance ToURLPiece String where
+  toURLPiece = encodeURIComponent
 
-type AjaxError
-  = { request :: Request Json
-    , description :: ErrorDescription
-    }
+instance ToURLPiece Int where
+  toURLPiece = toURLPiece <<< Int.toStringAs decimal
+
+instance ToURLPiece Number where
+  toURLPiece = toURLPiece <<< Number.toString
+
+instance ToURLPiece UUID where
+  toURLPiece = toURLPiece <<< UUID.toString
+
+instance ToURLPiece BigInt where
+  toURLPiece = toURLPiece <<< BigInt.toString
+
+instance ToURLPiece Json where
+  toURLPiece = toURLPiece <<< stringify
+
+type AjaxError =
+  { request :: Request Json
+  , description :: ErrorDescription
+  }
 
 data ErrorDescription
   = UnexpectedHTTPStatus (Response Json)
@@ -31,12 +63,13 @@ data ErrorDescription
 printAjaxError :: AjaxError -> String
 printAjaxError { description } =
   joinWith "\n" $
-    "Error making web request:"
-    : ( ("  " <> _)
+    "Error making web request:" :
+      ( ("  " <> _)
           <$> split (Pattern "\n") case description of
-              UnexpectedHTTPStatus response -> printUnexpectedHTTPStatus response
-              DecodingError error -> printJsonDecodeError error
-              ConnectingError error -> printError error
+            UnexpectedHTTPStatus response -> printUnexpectedHTTPStatus
+              response
+            DecodingError error -> printJsonDecodeError error
+            ConnectingError error -> printError error
       )
 
 printUnexpectedHTTPStatus :: Response Json -> String
