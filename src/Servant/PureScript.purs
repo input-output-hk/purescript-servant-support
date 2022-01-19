@@ -27,12 +27,14 @@ import Data.BigInt (BigInt)
 import Data.BigInt as BigInt
 import Data.Either (Either)
 import Data.Foldable (class Foldable, foldMap)
+import Data.Identity (Identity)
 import Data.Int (decimal)
 import Data.Int as Int
 import Data.List (List)
 import Data.List.Lazy as LL
 import Data.List.Lazy.NonEmpty as NLL
 import Data.List.NonEmpty (NonEmptyList)
+import Data.Maybe (Maybe)
 import Data.Newtype (unwrap)
 import Data.NonEmpty (NonEmpty)
 import Data.Number.Format as Number
@@ -73,6 +75,15 @@ instance ToURLPiece Json where
   toURLPiece = toURLPiece <<< stringify
 
 instance ToURLPiece a => ToURLPiece (Array a) where
+  toURLPiece = toURLPieceFoldable
+
+instance ToURLPiece a => ToURLPiece (Maybe a) where
+  toURLPiece = toURLPieceFoldable
+
+instance ToURLPiece a => ToURLPiece (Identity a) where
+  toURLPiece = toURLPieceFoldable
+
+instance ToURLPiece a => ToURLPiece (Either e a) where
   toURLPiece = toURLPieceFoldable
 
 instance ToURLPiece a => ToURLPiece (List a) where
