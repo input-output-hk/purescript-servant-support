@@ -1,16 +1,17 @@
 { name = "servant-support"
 , dependencies =
-  [ "affjax"
+  [ "aff"
+  , "affjax"
   , "argonaut"
   , "arrays"
-  , "bigints"
-  , "integers"
+  , "bifunctors"
+  , "either"
   , "newtype"
-  , "numbers"
   , "prelude"
   , "psci-support"
   , "strings"
-  , "uuid"
+  , "transformers"
+  , "uri"
   ]
 , packages = ./packages.dhall
 , sources = [ "src/**/*.purs" ]

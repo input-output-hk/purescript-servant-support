@@ -2,137 +2,92 @@ module Servant.PureScript where
 
 import Prelude
 
-import Affjax (Error, Request, Response, printError)
+import Affjax (Error)
 import Affjax as Affjax
+import Affjax.RequestBody (RequestBody(..))
+import Affjax.RequestHeader (RequestHeader)
+import Affjax.ResponseFormat (ResponseFormat)
+import Control.Apply (lift2)
 import Control.Monad.Cont (ContT)
-import Control.Monad.Error.Class (throwError)
-import Control.Monad.Except (ExceptT(..), except, mapExceptT, withExceptT)
+import Control.Monad.Except (ExceptT)
 import Control.Monad.Maybe.Trans (MaybeT)
 import Control.Monad.RWS (RWST)
 import Control.Monad.Reader (ReaderT)
 import Control.Monad.State (StateT)
-import Control.Monad.Trans.Class (class MonadTrans, lift)
+import Control.Monad.Trans.Class (lift)
 import Control.Monad.Writer (WriterT)
-import Data.Argonaut
-  ( class EncodeJson
-  , Json
-  , JsonDecodeError
-  , encodeJson
-  , printJsonDecodeError
-  , stringify
-  , stringifyWithIndent
-  )
-import Data.Array ((:))
-import Data.Array as A
-import Data.Array.NonEmpty (NonEmptyArray)
-import Data.Bifunctor (lmap)
-import Data.BigInt (BigInt)
-import Data.BigInt as BigInt
-import Data.Either (Either)
-import Data.Foldable (class Foldable, foldMap)
-import Data.Identity (Identity)
-import Data.Int (decimal)
-import Data.Int as Int
-import Data.List (List)
-import Data.List.Lazy as LL
-import Data.List.Lazy.NonEmpty as NLL
-import Data.List.NonEmpty (NonEmptyList)
-import Data.Maybe (Maybe)
+import Data.Argonaut (stringifyWithIndent)
+import Data.Array (fromFoldable)
+import Data.Bifunctor (class Bifunctor, bimap, lmap)
+import Data.Either (Either(..))
+import Data.HTTP.Method (CustomMethod, Method)
+import Data.Maybe (Maybe(..))
 import Data.Newtype (unwrap)
-import Data.NonEmpty (NonEmpty)
-import Data.Number.Format as Number
-import Data.String (Pattern(..), drop, joinWith, split)
-import Data.Symbol (class IsSymbol, reflectSymbol)
-import Data.UUID (UUID)
-import Data.UUID as UUID
+import Data.String (Pattern(..), joinWith, split)
 import Effect.Aff (Aff)
 import Effect.Aff.Class (class MonadAff)
-import Type.Proxy (Proxy)
+import URI (RelativeRef)
+import URI.RelativeRef (RelativeRefPrintOptions)
+import URI.RelativeRef as RR
 
-foreign import encodeURIComponent :: String -> String
+newtype ResponseT content m e a =
+  ResponseT
+    ( m
+        { request :: Affjax.Request content
+        , response :: Maybe (Affjax.Response content)
+        , result :: Either (ErrorDescription e) a
+        }
+    )
 
-data QueryItem a = QueryItem String a
+runResponse
+  :: forall content m e a
+   . ResponseT content m e a
+  -> m
+       { request :: Affjax.Request content
+       , response :: Maybe (Affjax.Response content)
+       , result :: Either (ErrorDescription e) a
+       }
+runResponse (ResponseT r) = r
 
--- | Class for types that can be encoded as a peice of a URI.
--- | The resulting string should URL encoded.
-class ToURLPiece a where
-  toURLPiece :: a -> String
+derive instance Functor m => Functor (ResponseT content m e)
 
-instance ToURLPiece (QueryItem String) where
-  toURLPiece (QueryItem name value) = name <> "=" <> value
+instance Functor m => Bifunctor (ResponseT content m) where
+  bimap f g (ResponseT m) =
+    ResponseT $ m <#> \r -> r { result = bimap (map f) g r.result }
 
-else instance EncodeJson a => ToURLPiece (QueryItem a) where
-  toURLPiece (QueryItem name value) = toURLPiece
-    (QueryItem name $ encodeJson value)
+instance Apply m => Apply (ResponseT content m e) where
+  apply (ResponseT r1) (ResponseT r2) = ResponseT $ lift2 apply' r1 r2
+    where
+    apply' r@{ result: Left e } _ =
+      r { result = Left e }
+    apply' _ r@{ result: Left e } =
+      r { result = Left e }
+    apply' { result: Right f } r@{ result: Right a } =
+      r { result = Right (f a) }
 
-else instance ToURLPiece a => ToURLPiece (QueryItem a) where
-  toURLPiece (QueryItem name value) = toURLPiece
-    (QueryItem name $ toURLPiece value)
+instance Monad m => Bind (ResponseT content m e) where
+  bind (ResponseT m) f = ResponseT $ bind m f'
+    where
+    f' r@{ result: Left e } = pure r { result = Left e }
+    f' { result: Right a } = case f a of
+      ResponseT m' -> m'
 
-instance ToURLPiece String where
-  toURLPiece = encodeURIComponent
+hoistResponseT
+  :: forall content m n e
+   . m ~> n
+  -> ResponseT content m e ~> ResponseT content n e
+hoistResponseT phi (ResponseT m) = ResponseT $ phi m
 
-instance ToURLPiece Boolean where
-  toURLPiece = encodeURIComponent <<< show
-
-instance ToURLPiece Int where
-  toURLPiece = toURLPiece <<< Int.toStringAs decimal
-
-instance ToURLPiece Number where
-  toURLPiece = toURLPiece <<< Number.toString
-
-instance ToURLPiece UUID where
-  toURLPiece = toURLPiece <<< UUID.toString
-
-instance ToURLPiece BigInt where
-  toURLPiece = toURLPiece <<< BigInt.toString
-
-instance ToURLPiece Json where
-  toURLPiece = toURLPiece <<< stringify
-
-instance ToURLPiece a => ToURLPiece (Array a) where
-  toURLPiece = toURLPieceFoldable
-
-instance ToURLPiece a => ToURLPiece (Either e a) where
-  toURLPiece = toURLPieceFoldable
-
-instance ToURLPiece a => ToURLPiece (Maybe a) where
-  toURLPiece = toURLPieceFoldable
-
-instance ToURLPiece a => ToURLPiece (Identity a) where
-  toURLPiece = toURLPieceFoldable
-
-instance ToURLPiece a => ToURLPiece (Either e a) where
-  toURLPiece = toURLPieceFoldable
-
-instance ToURLPiece a => ToURLPiece (List a) where
-  toURLPiece = toURLPieceFoldable
-
-instance ToURLPiece a => ToURLPiece (LL.List a) where
-  toURLPiece = toURLPieceFoldable
-
-instance (Foldable f, ToURLPiece a) => ToURLPiece (NonEmpty f a) where
-  toURLPiece = toURLPieceFoldable
-
-instance ToURLPiece a => ToURLPiece (NonEmptyArray a) where
-  toURLPiece = toURLPieceFoldable
-
-instance ToURLPiece a => ToURLPiece (NonEmptyList a) where
-  toURLPiece = toURLPieceFoldable
-
-instance ToURLPiece a => ToURLPiece (NLL.NonEmptyList a) where
-  toURLPiece = toURLPieceFoldable
-
-instance IsSymbol sym => ToURLPiece (Proxy sym) where
-  toURLPiece = toURLPiece <<< reflectSymbol
-
--- | An implementation of toURLPiece that uses a foldable instance
-toURLPieceFoldable :: forall f a. Foldable f => ToURLPiece a => f a -> String
-toURLPieceFoldable = drop 1 <<< foldMap \a -> toURLPiece a <> "/"
-
-type AjaxError =
-  { request :: Request Json
-  , description :: ErrorDescription
+type Request userInfo hosts path relPath query content e req res =
+  { method :: Either Method CustomMethod
+  , uri :: RelativeRef userInfo hosts path relPath query Void
+  , uriPrintOptions ::
+      { | RelativeRefPrintOptions userInfo hosts path relPath query Void () }
+  , headers :: Array RequestHeader
+  , content :: Maybe req
+  , encode :: req -> RequestBody
+  , decode :: content -> Either e res
+  , responseFormat :: ResponseFormat content
   }
 
 -- | Monads that can perform ajax requests. As stock instance for Aff calls
@@ -148,75 +103,124 @@ type AjaxError =
 -- |
 class MonadAff m <= MonadAjax m where
   request
-    :: forall a
-     . (Json -> Either JsonDecodeError a)
-    -> Request Json
-    -> ExceptT AjaxError m a
+    :: forall userInfo hosts path relPath query content e req res
+     . Request userInfo hosts path relPath query content e req res
+    -> ResponseT content m e res
 
 instance MonadAjax Aff where
-  request decode req = do
-    response <-
-      withExceptT (mkError <<< ConnectingError) $ ExceptT $ Affjax.request req
+  request req = do
+    response <- mkResponse affjaxReq Nothing ConnectingError $ Affjax.request
+      affjaxReq
     let status = unwrap response.status
-    when (status < 200 || status >= 300) do
-      throwError $ mkError $ UnexpectedHTTPStatus response
-    except $ lmap (mkError <<< DecodingError) $ decode response.body
+    if status < 200 || status >= 300 then
+      mkResponse affjaxReq (Just response) (const UnexpectedHTTPStatus)
+        $ pure
+        $ Left unit
+    else
+      mkResponse affjaxReq (Just response) DecodingError $ pure $ req.decode
+        response.body
     where
-    mkError description = { request: req, description }
+    affjaxReq = Affjax.defaultRequest
+      { method = req.method
+      , url = RR.print req.uriPrintOptions req.uri
+      , headers = req.headers
+      , content = req.encode <$> req.content
+      , responseFormat = req.responseFormat
+      }
+
+    mkResponse
+      :: forall a content e' e
+       . Affjax.Request content
+      -> Maybe (Affjax.Response content)
+      -> (e' -> ErrorDescription e)
+      -> Aff (Either e' a)
+      -> ResponseT content Aff e a
+    mkResponse r response mkError m = ResponseT $ m <#> \result ->
+      { request: r
+      , response
+      , result: lmap mkError result
+      }
 
 instance MonadAjax m => MonadAjax (ContT r m) where
-  request = liftRequest
+  request = hoistResponseT lift <<< request
 
 instance MonadAjax m => MonadAjax (ExceptT e m) where
-  request = liftRequest
+  request = hoistResponseT lift <<< request
 
 instance MonadAjax m => MonadAjax (MaybeT m) where
-  request = liftRequest
+  request = hoistResponseT lift <<< request
 
 instance (Monoid w, MonadAjax m) => MonadAjax (RWST r w s m) where
-  request = liftRequest
+  request = hoistResponseT lift <<< request
 
 instance MonadAjax m => MonadAjax (ReaderT r m) where
-  request = liftRequest
+  request = hoistResponseT lift <<< request
 
 instance (Monoid w, MonadAjax m) => MonadAjax (WriterT w m) where
-  request = liftRequest
+  request = hoistResponseT lift <<< request
 
 instance MonadAjax m => MonadAjax (StateT s m) where
-  request = liftRequest
+  request = hoistResponseT lift <<< request
 
--- | A version of request that works with any monad transformer.
-liftRequest
-  :: forall t m a
-   . MonadAjax m
-  => MonadTrans t
-  => (Json -> Either JsonDecodeError a)
-  -> Request Json
-  -> ExceptT AjaxError (t m) a
-liftRequest = map (map (mapExceptT lift)) request
-
-data ErrorDescription
-  = UnexpectedHTTPStatus (Response Json)
-  | DecodingError JsonDecodeError
+data ErrorDescription decodeError
+  = UnexpectedHTTPStatus
+  | DecodingError decodeError
   | ConnectingError Error
 
--- | Pretty-print an AjaxError
-printAjaxError :: AjaxError -> String
-printAjaxError { description } =
-  joinWith "\n" $
-    "Error making web request:" :
-      ( ("  " <> _)
-          <$> split (Pattern "\n") case description of
-            UnexpectedHTTPStatus response -> printUnexpectedHTTPStatus
-              response
-            DecodingError error -> printJsonDecodeError error
-            ConnectingError error -> printError error
-      )
+derive instance Functor ErrorDescription
 
-printUnexpectedHTTPStatus :: Response Json -> String
-printUnexpectedHTTPStatus response =
-  joinWith "\n"
-    [ "Status code: " <> show (unwrap response.status)
-    , "Status text: " <> response.statusText
-    , "Content: " <> stringifyWithIndent 2 response.body
+runResponseT
+  :: forall content m e e' a
+   . Functor m
+  => ( Affjax.Request content
+       -> Maybe (Affjax.Response content)
+       -> ErrorDescription e
+       -> e'
+     )
+  -> ResponseT content m e a
+  -> m (Either e' a)
+runResponseT handleError (ResponseT m) = m <#> case _ of
+  { result: Right a } -> Right a
+  r@{ result: Left e } -> Left $ handleError r.request r.response e
+
+printError
+  :: forall content m e
+   . Functor m
+  => (content -> String)
+  -> (e -> String)
+  -> Affjax.Request content
+  -> Maybe (Affjax.Response content)
+  -> ErrorDescription e
+  -> String
+printError printResponseBody printDecodeError request response description =
+  joinWith "\n" $ join
+    [ [ "Error making web request:" ]
+    , [ "Request Info:" ]
+    , (" " <> _) <$>
+        [ "URI: " <> request.url
+        , "Method: " <> show request.method
+        , "Headers: " <> show request.headers
+        , append "Body: " $ show $ flip map request.content $ case _ of
+            ArrayView _ -> "ArrayView"
+            Blob _ -> "Blob"
+            Document _ -> "Document"
+            String s -> s
+            FormData _ -> "FormData"
+            FormURLEncoded fue -> show fue
+            Json json -> stringifyWithIndent 2 json
+        ]
+    , fromFoldable response >>= \resp -> join
+        [ [ "Response Info:" ]
+        , (" " <> _) <$>
+            [ "StatusCode: " <> show resp.status
+            , "StatusText: " <> show resp.statusText
+            , "Headers: " <> show resp.headers
+            , "Body: " <> printResponseBody resp.body
+            ]
+        ]
+    , [ "Failure:" ]
+    , ("  " <> _) <$> split (Pattern "\n") case description of
+        UnexpectedHTTPStatus -> "Unexpected HTTP Status"
+        DecodingError error -> printDecodeError error
+        ConnectingError error -> Affjax.printError error
     ]
