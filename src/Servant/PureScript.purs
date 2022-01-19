@@ -22,6 +22,7 @@ import Data.Argonaut
   , stringifyWithIndent
   )
 import Data.Array ((:))
+import Data.Array.NonEmpty (NonEmptyArray)
 import Data.Bifunctor (lmap)
 import Data.BigInt (BigInt)
 import Data.BigInt as BigInt
@@ -29,12 +30,19 @@ import Data.Either (Either)
 import Data.Foldable (class Foldable, foldMap)
 import Data.Int (decimal)
 import Data.Int as Int
+import Data.List (List)
+import Data.List.Lazy as LL
+import Data.List.Lazy.NonEmpty as NLL
+import Data.List.NonEmpty (NonEmptyList)
 import Data.Newtype (unwrap)
+import Data.NonEmpty (NonEmpty)
 import Data.Number.Format as Number
 import Data.String (Pattern(..), drop, joinWith, split)
+import Data.Symbol (class IsSymbol, reflectSymbol)
 import Data.UUID (UUID)
 import Data.UUID as UUID
 import Effect.Aff (Aff)
+import Type.Proxy (Proxy)
 
 foreign import encodeURIComponent :: String -> String
 
@@ -43,6 +51,9 @@ class ToURLPiece a where
 
 instance ToURLPiece String where
   toURLPiece = encodeURIComponent
+
+instance ToURLPiece Boolean where
+  toURLPiece = encodeURIComponent <<< show
 
 instance ToURLPiece Int where
   toURLPiece = toURLPiece <<< Int.toStringAs decimal
@@ -61,6 +72,27 @@ instance ToURLPiece Json where
 
 instance ToURLPiece a => ToURLPiece (Array a) where
   toURLPiece = toURLPieceFoldable
+
+instance ToURLPiece a => ToURLPiece (List a) where
+  toURLPiece = toURLPieceFoldable
+
+instance ToURLPiece a => ToURLPiece (LL.List a) where
+  toURLPiece = toURLPieceFoldable
+
+instance (Foldable f, ToURLPiece a) => ToURLPiece (NonEmpty f a) where
+  toURLPiece = toURLPieceFoldable
+
+instance ToURLPiece a => ToURLPiece (NonEmptyArray a) where
+  toURLPiece = toURLPieceFoldable
+
+instance ToURLPiece a => ToURLPiece (NonEmptyList a) where
+  toURLPiece = toURLPieceFoldable
+
+instance ToURLPiece a => ToURLPiece (NLL.NonEmptyList a) where
+  toURLPiece = toURLPieceFoldable
+
+instance IsSymbol sym => ToURLPiece (Proxy sym) where
+  toURLPiece = toURLPiece <<< reflectSymbol
 
 toURLPieceFoldable :: forall f a. Foldable f => ToURLPiece a => f a -> String
 toURLPieceFoldable = drop 1 <<< foldMap \a -> toURLPiece a <> "/"
