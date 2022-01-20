@@ -5,90 +5,105 @@ import Prelude
 import Affjax (Error)
 import Affjax as Affjax
 import Affjax.RequestBody (RequestBody(..))
+import Affjax.RequestBody as RequestBody
 import Affjax.RequestHeader (RequestHeader)
 import Affjax.ResponseFormat (ResponseFormat)
-import Control.Apply (lift2)
+import Affjax.ResponseFormat as Response
 import Control.Monad.Cont (ContT)
-import Control.Monad.Except (ExceptT)
+import Control.Monad.Except (ExceptT(..), except, mapExceptT, withExceptT)
+import Control.Monad.Identity.Trans (IdentityT)
 import Control.Monad.Maybe.Trans (MaybeT)
 import Control.Monad.RWS (RWST)
 import Control.Monad.Reader (ReaderT)
 import Control.Monad.State (StateT)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Writer (WriterT)
-import Data.Argonaut (stringifyWithIndent)
+import Data.Argonaut (Json, caseJsonString, stringify, stringifyWithIndent)
 import Data.Array (fromFoldable)
-import Data.Bifunctor (class Bifunctor, bimap, lmap)
+import Data.Array.NonEmpty as NEA
+import Data.Bifunctor (lmap)
 import Data.Either (Either(..))
 import Data.HTTP.Method (CustomMethod, Method)
 import Data.Maybe (Maybe(..))
 import Data.Newtype (unwrap)
+import Data.NonEmpty ((:|))
 import Data.String (Pattern(..), joinWith, split)
+import Data.String.NonEmpty as NES
+import Data.Tuple (Tuple(..))
 import Effect.Aff (Aff)
-import Effect.Aff.Class (class MonadAff)
-import URI (RelativeRef)
-import URI.RelativeRef (RelativeRefPrintOptions)
+import URI (Fragment, Host, Path, PathAbsolute(..), RelativeRef, UserInfo)
+import URI.Extra.QueryPairs
+  ( Key
+  , QueryPairs(..)
+  , Value
+  , keyFromString
+  , valueFromString
+  )
+import URI.Extra.QueryPairs as QueryPairs
+import URI.Host as Host
+import URI.Path.Segment (segmentFromString, segmentNZFromString)
 import URI.RelativeRef as RR
 
-newtype ResponseT content m e a =
-  ResponseT
-    ( m
-        { request :: Affjax.Request content
-        , response :: Maybe (Affjax.Response content)
-        , result :: Either (ErrorDescription e) a
-        }
-    )
+class ToPathSegment a where
+  toPathSegment :: a -> String
 
-runResponse
-  :: forall content m e a
-   . ResponseT content m e a
-  -> m
-       { request :: Affjax.Request content
-       , response :: Maybe (Affjax.Response content)
-       , result :: Either (ErrorDescription e) a
-       }
-runResponse (ResponseT r) = r
+instance ToPathSegment String where
+  toPathSegment = identity
 
-derive instance Functor m => Functor (ResponseT content m e)
+class ToQueryValue a where
+  toQueryValue :: a -> Value
 
-instance Functor m => Bifunctor (ResponseT content m) where
-  bimap f g (ResponseT m) =
-    ResponseT $ m <#> \r -> r { result = bimap (map f) g r.result }
+instance ToQueryValue String where
+  toQueryValue = valueFromString
 
-instance Apply m => Apply (ResponseT content m e) where
-  apply (ResponseT r1) (ResponseT r2) = ResponseT $ lift2 apply' r1 r2
-    where
-    apply' r@{ result: Left e } _ =
-      r { result = Left e }
-    apply' _ r@{ result: Left e } =
-      r { result = Left e }
-    apply' { result: Right f } r@{ result: Right a } =
-      r { result = Right (f a) }
+instance ToQueryValue Json where
+  toQueryValue value =
+    valueFromString $ caseJsonString (stringify value) identity value
 
-instance Monad m => Bind (ResponseT content m e) where
-  bind (ResponseT m) f = ResponseT $ bind m f'
-    where
-    f' r@{ result: Left e } = pure r { result = Left e }
-    f' { result: Right a } = case f a of
-      ResponseT m' -> m'
+class ToHeader a where
+  toHeader :: a -> String
 
-hoistResponseT
-  :: forall content m n e
-   . m ~> n
-  -> ResponseT content m e ~> ResponseT content n e
-hoistResponseT phi (ResponseT m) = ResponseT $ phi m
+instance ToHeader String where
+  toHeader = identity
 
-type Request userInfo hosts path relPath query content e req res =
+instance ToHeader Json where
+  toHeader = toHeader <<< stringify
+
+flagQueryPairs :: String -> Boolean -> QueryPairs Key Value
+flagQueryPairs name true = QueryPairs [ Tuple (keyFromString name) Nothing ]
+flagQueryPairs _ _ = QueryPairs []
+
+paramQueryPairs
+  :: forall a. ToQueryValue a => String -> Maybe a -> QueryPairs Key Value
+paramQueryPairs name = paramListQueryPairs name <<< fromFoldable
+
+paramListQueryPairs
+  :: forall a. ToQueryValue a => String -> Array a -> QueryPairs Key Value
+paramListQueryPairs name =
+  QueryPairs <<< map (Tuple (keyFromString name) <<< Just <<< toQueryValue)
+
+type RequestUri =
+  RelativeRef UserInfo Host Path (Array String) (QueryPairs Key Value) Fragment
+
+type Request reqContent resContent decodeError req res =
   { method :: Either Method CustomMethod
-  , uri :: RelativeRef userInfo hosts path relPath query Void
-  , uriPrintOptions ::
-      { | RelativeRefPrintOptions userInfo hosts path relPath query Void () }
+  , uri :: RequestUri
   , headers :: Array RequestHeader
   , content :: Maybe req
-  , encode :: req -> RequestBody
-  , decode :: content -> Either e res
-  , responseFormat :: ResponseFormat content
+  , encode :: req -> reqContent
+  , decode :: resContent -> Either decodeError res
   }
+
+class ContentType content where
+  responseFormat
+    :: forall reqContent decodeError req res
+     . Request reqContent content decodeError req res
+    -> ResponseFormat content
+  requestBody :: content -> RequestBody
+
+instance ContentType Json where
+  responseFormat _ = Response.json
+  requestBody = RequestBody.json
 
 -- | Monads that can perform ajax requests. As stock instance for Aff calls
 -- | Affjax.request without modifying the request. Custom instances can be used
@@ -101,98 +116,111 @@ type Request userInfo hosts path relPath query content e req res =
 -- |   - Handle authentication and token persistence transparently.
 -- |   - Add and handle common headers to requests.
 -- |
-class MonadAff m <= MonadAjax m where
+class
+  Monad m <=
+  MonadAjax decodeError resContent e m
+  | m resContent decodeError -> e where
   request
-    :: forall userInfo hosts path relPath query content e req res
-     . Request userInfo hosts path relPath query content e req res
-    -> ResponseT content m e res
+    :: forall reqContent req res
+     . ContentType reqContent
+    => ContentType resContent
+    => Request reqContent resContent decodeError req res
+    -> ExceptT e m res
 
-instance MonadAjax Aff where
+instance
+  ContentType content =>
+  MonadAjax decodeError content (AjaxError decodeError content) Aff where
   request req = do
-    response <- mkResponse affjaxReq Nothing ConnectingError $ Affjax.request
-      affjaxReq
+    response <- withExceptT (mkError Nothing <<< ConnectingError)
+      $ ExceptT
+      $ Affjax.request aReq
     let status = unwrap response.status
-    if status < 200 || status >= 300 then
-      mkResponse affjaxReq (Just response) (const UnexpectedHTTPStatus)
-        $ pure
-        $ Left unit
-    else
-      mkResponse affjaxReq (Just response) DecodingError $ pure $ req.decode
-        response.body
+    except
+      if status < 200 || status >= 300 then
+        Left $ mkError (Just response) UnexpectedHTTPStatus
+      else
+        lmap
+          (mkError (Just response) <<< MalformedContent)
+          (req.decode response.body)
     where
-    affjaxReq = Affjax.defaultRequest
+    aReq = Affjax.defaultRequest
       { method = req.method
-      , url = RR.print req.uriPrintOptions req.uri
+      , url = RR.print
+          { printUserInfo: identity
+          , printHosts: Host.print
+          , printPath: identity
+          , printRelPath: Left <<< segmentsToPathAbsolute
+          , printQuery: QueryPairs.print identity identity
+          , printFragment: identity
+          }
+          req.uri
       , headers = req.headers
-      , content = req.encode <$> req.content
-      , responseFormat = req.responseFormat
+      , content = requestBody <<< req.encode <$> req.content
+      , responseFormat = responseFormat req
       }
 
-    mkResponse
-      :: forall a content e' e
-       . Affjax.Request content
-      -> Maybe (Affjax.Response content)
-      -> (e' -> ErrorDescription e)
-      -> Aff (Either e' a)
-      -> ResponseT content Aff e a
-    mkResponse r response mkError m = ResponseT $ m <#> \result ->
-      { request: r
+    mkError response description = AjaxError
+      { request: aReq
       , response
-      , result: lmap mkError result
+      , description
       }
 
-instance MonadAjax m => MonadAjax (ContT r m) where
-  request = hoistResponseT lift <<< request
+segmentsToPathAbsolute :: Array String -> PathAbsolute
+segmentsToPathAbsolute =
+  PathAbsolute <<< (convertNonEmpty <<< NEA.toNonEmpty <=< NEA.fromArray)
+  where
+  convertNonEmpty (segmentNZ :| segments) = Tuple
+    <$> (segmentNZFromString <$> NES.fromString segmentNZ)
+    <*> pure (segmentFromString <$> segments)
 
-instance MonadAjax m => MonadAjax (ExceptT e m) where
-  request = hoistResponseT lift <<< request
+instance MonadAjax c de e m => MonadAjax c de e (ContT r m) where
+  request = mapExceptT lift <<< request
 
-instance MonadAjax m => MonadAjax (MaybeT m) where
-  request = hoistResponseT lift <<< request
+instance MonadAjax c de e m => MonadAjax c de e (IdentityT m) where
+  request = mapExceptT lift <<< request
 
-instance (Monoid w, MonadAjax m) => MonadAjax (RWST r w s m) where
-  request = hoistResponseT lift <<< request
+instance MonadAjax c de e m => MonadAjax c de e (ExceptT e' m) where
+  request = mapExceptT lift <<< request
 
-instance MonadAjax m => MonadAjax (ReaderT r m) where
-  request = hoistResponseT lift <<< request
+instance MonadAjax c de e m => MonadAjax c de e (MaybeT m) where
+  request = mapExceptT lift <<< request
 
-instance (Monoid w, MonadAjax m) => MonadAjax (WriterT w m) where
-  request = hoistResponseT lift <<< request
+instance (Monoid w, MonadAjax c de e m) => MonadAjax c de e (RWST r w s m) where
+  request = mapExceptT lift <<< request
 
-instance MonadAjax m => MonadAjax (StateT s m) where
-  request = hoistResponseT lift <<< request
+instance MonadAjax c de e m => MonadAjax c de e (ReaderT r m) where
+  request = mapExceptT lift <<< request
+
+instance (Monoid w, MonadAjax c de e m) => MonadAjax c de e (WriterT w m) where
+  request = mapExceptT lift <<< request
+
+instance MonadAjax c de e m => MonadAjax c de e (StateT s m) where
+  request = mapExceptT lift <<< request
+
+newtype AjaxError decodeError content =
+  AjaxError
+    { request :: Affjax.Request content
+    , response :: Maybe (Affjax.Response content)
+    , description :: ErrorDescription decodeError
+    }
 
 data ErrorDescription decodeError
   = UnexpectedHTTPStatus
-  | DecodingError decodeError
+  | MalformedContent decodeError
   | ConnectingError Error
 
 derive instance Functor ErrorDescription
 
-runResponseT
-  :: forall content m e e' a
-   . Functor m
-  => ( Affjax.Request content
-       -> Maybe (Affjax.Response content)
-       -> ErrorDescription e
-       -> e'
-     )
-  -> ResponseT content m e a
-  -> m (Either e' a)
-runResponseT handleError (ResponseT m) = m <#> case _ of
-  { result: Right a } -> Right a
-  r@{ result: Left e } -> Left $ handleError r.request r.response e
-
-printError
-  :: forall content m e
-   . Functor m
-  => (content -> String)
-  -> (e -> String)
-  -> Affjax.Request content
-  -> Maybe (Affjax.Response content)
-  -> ErrorDescription e
+printAjaxError
+  :: forall decodeError content
+   . (content -> String)
+  -> (decodeError -> String)
+  -> AjaxError decodeError content
   -> String
-printError printResponseBody printDecodeError request response description =
+printAjaxError
+  printResponseBody
+  printDecodeError
+  (AjaxError { request, response, description }) =
   joinWith "\n" $ join
     [ [ "Error making web request:" ]
     , [ "Request Info:" ]
@@ -221,6 +249,6 @@ printError printResponseBody printDecodeError request response description =
     , [ "Failure:" ]
     , ("  " <> _) <$> split (Pattern "\n") case description of
         UnexpectedHTTPStatus -> "Unexpected HTTP Status"
-        DecodingError error -> printDecodeError error
+        MalformedContent error -> printDecodeError error
         ConnectingError error -> Affjax.printError error
     ]
