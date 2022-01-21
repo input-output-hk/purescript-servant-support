@@ -50,6 +50,9 @@ class ToPathSegment a where
 instance ToPathSegment String where
   toPathSegment = identity
 
+instance ToPathSegment Json where
+  toPathSegment value = caseJsonString (stringify value) identity value
+
 class ToQueryValue a where
   toQueryValue :: a -> Value
 
@@ -67,7 +70,7 @@ instance ToHeader String where
   toHeader = identity
 
 instance ToHeader Json where
-  toHeader = toHeader <<< stringify
+  toHeader value = caseJsonString (stringify value) identity value
 
 flagQueryPairs :: String -> Boolean -> QueryPairs Key Value
 flagQueryPairs name true = QueryPairs [ Tuple (keyFromString name) Nothing ]
