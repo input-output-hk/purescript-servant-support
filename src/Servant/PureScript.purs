@@ -10,7 +10,7 @@ import Affjax.RequestHeader (RequestHeader)
 import Affjax.ResponseFormat (ResponseFormat)
 import Affjax.ResponseFormat as Response
 import Control.Monad.Cont (ContT)
-import Control.Monad.Except (ExceptT(..), except, mapExceptT, withExceptT)
+import Control.Monad.Except (ExceptT(..), except, runExceptT, withExceptT)
 import Control.Monad.Identity.Trans (IdentityT)
 import Control.Monad.Maybe.Trans (MaybeT)
 import Control.Monad.RWS (RWST)
@@ -119,23 +119,17 @@ instance ContentType Json where
 -- |   - Handle authentication and token persistence transparently.
 -- |   - Add and handle common headers to requests.
 -- |
-class
-  Monad m <=
-  MonadAjax api decodeError resContent e m
-  | resContent -> decodeError
-  , m decodeError -> e where
+class Monad m <= MonadAjax api m where
   request
-    :: forall reqContent req res
+    :: forall decodeError resContent reqContent req res
      . ContentType reqContent
     => ContentType resContent
     => api
     -> Request reqContent resContent decodeError req res
-    -> ExceptT e m res
+    -> m (Either (AjaxError decodeError resContent) res)
 
-instance
-  ContentType content =>
-  MonadAjax api decodeError content (AjaxError decodeError content) Aff where
-  request _ req = do
+instance MonadAjax api Aff where
+  request _ req = runExceptT $ do
     response <- withExceptT (mkError Nothing <<< ConnectingError)
       $ ExceptT
       $ Affjax.request aReq
@@ -178,37 +172,29 @@ segmentsToPathAbsolute =
     <$> (segmentNZFromString <$> NES.fromString segmentNZ)
     <*> pure (segmentFromString <$> segments)
 
-instance MonadAjax api c de e m => MonadAjax api c de e (ContT r m) where
-  request api = mapExceptT lift <<< request api
+instance MonadAjax api m => MonadAjax api (ContT r m) where
+  request api = lift <<< request api
 
-instance MonadAjax api c de e m => MonadAjax api c de e (IdentityT m) where
-  request api = mapExceptT lift <<< request api
+instance MonadAjax api m => MonadAjax api (IdentityT m) where
+  request api = lift <<< request api
 
-instance MonadAjax api c de e m => MonadAjax api c de e (ExceptT e' m) where
-  request api = mapExceptT lift <<< request api
+instance MonadAjax api m => MonadAjax api (ExceptT e' m) where
+  request api = lift <<< request api
 
-instance MonadAjax api c de e m => MonadAjax api c de e (MaybeT m) where
-  request api = mapExceptT lift <<< request api
+instance MonadAjax api m => MonadAjax api (MaybeT m) where
+  request api = lift <<< request api
 
-instance
-  ( Monoid w
-  , MonadAjax api c de e m
-  ) =>
-  MonadAjax api c de e (RWST r w s m) where
-  request api = mapExceptT lift <<< request api
+instance (Monoid w, MonadAjax api m) => MonadAjax api (RWST r w s m) where
+  request api = lift <<< request api
 
-instance MonadAjax api c de e m => MonadAjax api c de e (ReaderT r m) where
-  request api = mapExceptT lift <<< request api
+instance MonadAjax api m => MonadAjax api (ReaderT r m) where
+  request api = lift <<< request api
 
-instance
-  ( Monoid w
-  , MonadAjax api c de e m
-  ) =>
-  MonadAjax api c de e (WriterT w m) where
-  request api = mapExceptT lift <<< request api
+instance (Monoid w, MonadAjax api m) => MonadAjax api (WriterT w m) where
+  request api = lift <<< request api
 
-instance MonadAjax api c de e m => MonadAjax api c de e (StateT s m) where
-  request api = mapExceptT lift <<< request api
+instance MonadAjax api m => MonadAjax api (StateT s m) where
+  request api = lift <<< request api
 
 newtype AjaxError decodeError content =
   AjaxError
