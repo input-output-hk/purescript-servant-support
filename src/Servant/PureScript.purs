@@ -97,11 +97,6 @@ type Request reqContent resContent decodeError req res =
   , decode :: resContent -> Either decodeError res
   }
 
-class
-  ErrorHandler decodeError content error api
-  | api content -> decodeError error where
-  handleError :: api -> AjaxError decodeError content -> error
-
 class ContentType content where
   responseFormat
     :: forall reqContent decodeError req res
@@ -124,18 +119,21 @@ instance ContentType Json where
 -- |   - Handle authentication and token persistence transparently.
 -- |   - Add and handle common headers to requests.
 -- |
-class Monad m <= MonadAjax api m where
+class
+  Monad m <=
+  MonadAjax decodeError resContent e m
+  | m resContent decodeError -> e where
   request
-    :: forall reqContent decodeError resContent e req res
-     . ErrorHandler decodeError resContent e api
-    => ContentType reqContent
+    :: forall reqContent req res
+     . ContentType reqContent
     => ContentType resContent
-    => api
-    -> Request reqContent resContent decodeError req res
+    => Request reqContent resContent decodeError req res
     -> ExceptT e m res
 
-instance MonadAjax api Aff where
-  request api req = withExceptT (handleError api) do
+instance
+  ContentType content =>
+  MonadAjax decodeError content (AjaxError decodeError content) Aff where
+  request req = do
     response <- withExceptT (mkError Nothing <<< ConnectingError)
       $ ExceptT
       $ Affjax.request aReq
@@ -178,29 +176,29 @@ segmentsToPathAbsolute =
     <$> (segmentNZFromString <$> NES.fromString segmentNZ)
     <*> pure (segmentFromString <$> segments)
 
-instance MonadAjax api m => MonadAjax api (ContT r m) where
-  request api = mapExceptT lift <<< request api
+instance MonadAjax c de e m => MonadAjax c de e (ContT r m) where
+  request = mapExceptT lift <<< request
 
-instance MonadAjax api m => MonadAjax api (IdentityT m) where
-  request api = mapExceptT lift <<< request api
+instance MonadAjax c de e m => MonadAjax c de e (IdentityT m) where
+  request = mapExceptT lift <<< request
 
-instance MonadAjax api m => MonadAjax api (ExceptT e' m) where
-  request api = mapExceptT lift <<< request api
+instance MonadAjax c de e m => MonadAjax c de e (ExceptT e' m) where
+  request = mapExceptT lift <<< request
 
-instance MonadAjax api m => MonadAjax api (MaybeT m) where
-  request api = mapExceptT lift <<< request api
+instance MonadAjax c de e m => MonadAjax c de e (MaybeT m) where
+  request = mapExceptT lift <<< request
 
-instance (Monoid w, MonadAjax api m) => MonadAjax api (RWST r w s m) where
-  request api = mapExceptT lift <<< request api
+instance (Monoid w, MonadAjax c de e m) => MonadAjax c de e (RWST r w s m) where
+  request = mapExceptT lift <<< request
 
-instance MonadAjax api m => MonadAjax api (ReaderT r m) where
-  request api = mapExceptT lift <<< request api
+instance MonadAjax c de e m => MonadAjax c de e (ReaderT r m) where
+  request = mapExceptT lift <<< request
 
-instance (Monoid w, MonadAjax api m) => MonadAjax api (WriterT w m) where
-  request api = mapExceptT lift <<< request api
+instance (Monoid w, MonadAjax c de e m) => MonadAjax c de e (WriterT w m) where
+  request = mapExceptT lift <<< request
 
-instance MonadAjax api m => MonadAjax api (StateT s m) where
-  request api = mapExceptT lift <<< request api
+instance MonadAjax c de e m => MonadAjax c de e (StateT s m) where
+  request = mapExceptT lift <<< request
 
 newtype AjaxError decodeError content =
   AjaxError
