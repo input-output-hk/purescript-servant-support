@@ -119,7 +119,11 @@ instance ContentType Json where
 -- |   - Handle authentication and token persistence transparently.
 -- |   - Add and handle common headers to requests.
 -- |
-class Monad m <= MonadAjax api decodeError resContent e m where
+class
+  Monad m <=
+  MonadAjax api decodeError resContent e m
+  | resContent -> decodeError
+  , m decodeError -> e where
   request
     :: forall reqContent req res
      . ContentType reqContent
