@@ -8,3 +8,5 @@
 /.idea
 /.spago
 .psc-ide-port
+.direnv
+.envrc
