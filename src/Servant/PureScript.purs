@@ -18,7 +18,14 @@ import Control.Monad.Reader (ReaderT)
 import Control.Monad.State (StateT)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Writer (WriterT)
-import Data.Argonaut (Json, caseJsonString, stringify, stringifyWithIndent)
+import Data.Argonaut
+  ( Json
+  , JsonDecodeError
+  , caseJsonString
+  , printJsonDecodeError
+  , stringify
+  , stringifyWithIndent
+  )
 import Data.Array (fromFoldable)
 import Data.Array.NonEmpty as NEA
 import Data.Bifunctor (lmap)
@@ -31,6 +38,7 @@ import Data.String (Pattern(..), joinWith, split)
 import Data.String.NonEmpty as NES
 import Data.Tuple (Tuple(..))
 import Effect.Aff (Aff)
+import Type.Proxy (Proxy(..))
 import URI (Fragment, Host, Path, PathAbsolute(..), RelativeRef, UserInfo)
 import URI.Extra.QueryPairs
   ( Key
@@ -97,16 +105,20 @@ type Request reqContent resContent decodeError req res =
   , decode :: resContent -> Either decodeError res
   }
 
-class ContentType content where
+class ContentType error content | content -> error where
   responseFormat
     :: forall reqContent decodeError req res
      . Request reqContent content decodeError req res
     -> ResponseFormat content
   requestBody :: content -> RequestBody
+  serializeContent :: content -> String
+  serializeError :: Proxy content -> error -> String
 
-instance ContentType Json where
+instance ContentType JsonDecodeError Json where
   responseFormat _ = Response.json
   requestBody = RequestBody.json
+  serializeContent = stringify
+  serializeError _ = printJsonDecodeError
 
 -- | Monads that can perform ajax requests. As stock instance for Aff calls
 -- | Affjax.request without modifying the request. Custom instances can be used
@@ -122,8 +134,8 @@ instance ContentType Json where
 class Monad m <= MonadAjax api m where
   request
     :: forall decodeError resContent reqContent req res
-     . ContentType reqContent
-    => ContentType resContent
+     . ContentType decodeError reqContent
+    => ContentType decodeError resContent
     => api
     -> Request reqContent resContent decodeError req res
     -> m (Either (AjaxError decodeError resContent) res)
@@ -212,14 +224,10 @@ derive instance Functor ErrorDescription
 
 printAjaxError
   :: forall decodeError content
-   . (content -> String)
-  -> (decodeError -> String)
-  -> AjaxError decodeError content
+   . ContentType decodeError content
+  => AjaxError decodeError content
   -> String
-printAjaxError
-  printResponseBody
-  printDecodeError
-  (AjaxError { request, response, description }) =
+printAjaxError (AjaxError { request, response, description }) =
   joinWith "\n" $ join
     [ [ "Error making web request:" ]
     , [ "Request Info:" ]
@@ -242,12 +250,12 @@ printAjaxError
             [ "StatusCode: " <> show resp.status
             , "StatusText: " <> show resp.statusText
             , "Headers: " <> show resp.headers
-            , "Body: " <> printResponseBody resp.body
+            , "Body: " <> serializeContent resp.body
             ]
         ]
     , [ "Failure:" ]
     , ("  " <> _) <$> split (Pattern "\n") case description of
         UnexpectedHTTPStatus -> "Unexpected HTTP Status"
-        MalformedContent error -> printDecodeError error
+        MalformedContent error -> serializeError (Proxy :: _ content) error
         ConnectingError error -> Affjax.printError error
     ]
