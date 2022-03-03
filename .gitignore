@@ -10,3 +10,4 @@
 .psc-ide-port
 .direnv
 .envrc
+*.log

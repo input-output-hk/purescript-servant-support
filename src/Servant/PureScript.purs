@@ -105,7 +105,7 @@ type Request reqContent resContent decodeError req res =
   , decode :: resContent -> Either decodeError res
   }
 
-class ContentType error content | content -> error where
+class Eq content <= ContentType error content | content -> error where
   responseFormat
     :: forall reqContent decodeError req res
      . Request reqContent content decodeError req res
@@ -133,48 +133,68 @@ instance ContentType JsonDecodeError Json where
 -- |
 class Monad m <= MonadAjax api m where
   request
-    :: forall decodeError resContent reqContent req res
-     . ContentType decodeError reqContent
-    => ContentType decodeError resContent
+    :: forall reqDecodeError resDecodeError resContent reqContent req res
+     . ContentType reqDecodeError reqContent
+    => ContentType resDecodeError resContent
     => api
-    -> Request reqContent resContent decodeError req res
-    -> m (Either (AjaxError decodeError resContent) res)
+    -> Request reqContent resContent resDecodeError req res
+    -> m (Either (AjaxError resDecodeError resContent) res)
 
 instance MonadAjax api Aff where
   request _ req = runExceptT $ do
     response <- withExceptT (mkError Nothing <<< ConnectingError)
       $ ExceptT
       $ Affjax.request aReq
-    let status = unwrap response.status
-    except
-      if status < 200 || status >= 300 then
-        Left $ mkError (Just response) UnexpectedHTTPStatus
-      else
-        lmap
-          (mkError (Just response) <<< MalformedContent)
-          (req.decode response.body)
+    except $ prepareResponse req.decode aReq response
     where
-    aReq = Affjax.defaultRequest
-      { method = req.method
-      , url = RR.print
-          { printUserInfo: identity
-          , printHosts: Host.print
-          , printPath: identity
-          , printRelPath: Left <<< segmentsToPathAbsolute
-          , printQuery: QueryPairs.print identity identity
-          , printFragment: identity
-          }
-          req.uri
-      , headers = req.headers
-      , content = requestBody <<< req.encode <$> req.content
-      , responseFormat = responseFormat req
-      }
-
+    aReq = prepareRequest req
     mkError response description = AjaxError
       { request: aReq
       , response
       , description
       }
+
+prepareResponse
+  :: forall decodeError content res
+   . ContentType decodeError content
+  => (content -> Either decodeError res)
+  -> Affjax.Request content
+  -> Affjax.Response content
+  -> Either (AjaxError decodeError content) res
+prepareResponse decode req response = lmap mkError do
+  let status = unwrap response.status
+  if status < 200 || status >= 300 then
+    Left UnexpectedHTTPStatus
+  else
+    lmap MalformedContent $ decode response.body
+  where
+  mkError description = AjaxError
+    { request: req
+    , response: Just response
+    , description
+    }
+
+prepareRequest
+  :: forall reqDecodeError resDecodeError resContent reqContent req res
+   . ContentType reqDecodeError reqContent
+  => ContentType resDecodeError resContent
+  => Request reqContent resContent resDecodeError req res
+  -> Affjax.Request resContent
+prepareRequest req = Affjax.defaultRequest
+  { method = req.method
+  , url = RR.print
+      { printUserInfo: identity
+      , printHosts: Host.print
+      , printPath: identity
+      , printRelPath: Left <<< segmentsToPathAbsolute
+      , printQuery: QueryPairs.print identity identity
+      , printFragment: identity
+      }
+      req.uri
+  , headers = req.headers
+  , content = requestBody <<< req.encode <$> req.content
+  , responseFormat = responseFormat req
+  }
 
 segmentsToPathAbsolute :: Array String -> PathAbsolute
 segmentsToPathAbsolute =
