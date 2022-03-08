@@ -10,7 +10,7 @@ import Affjax.RequestHeader (RequestHeader)
 import Affjax.ResponseFormat (ResponseFormat)
 import Affjax.ResponseFormat as Response
 import Control.Monad.Cont (ContT)
-import Control.Monad.Except (ExceptT(..), except, runExceptT, withExceptT)
+import Control.Monad.Except (ExceptT)
 import Control.Monad.Identity.Trans (IdentityT)
 import Control.Monad.Maybe.Trans (MaybeT)
 import Control.Monad.RWS (RWST)
@@ -28,8 +28,9 @@ import Data.Argonaut
   )
 import Data.Array (fromFoldable)
 import Data.Array.NonEmpty as NEA
+import Data.ArrayBuffer.Types (ArrayBuffer)
 import Data.Bifunctor (lmap)
-import Data.Either (Either(..))
+import Data.Either (Either(..), hush)
 import Data.HTTP.Method (CustomMethod, Method)
 import Data.Maybe (Maybe(..))
 import Data.Newtype (unwrap)
@@ -51,6 +52,8 @@ import URI.Extra.QueryPairs as QueryPairs
 import URI.Host as Host
 import URI.Path.Segment (segmentFromString, segmentNZFromString)
 import URI.RelativeRef as RR
+import Web.DOM (Document)
+import Web.File.Blob (Blob)
 
 class ToPathSegment a where
   toPathSegment :: a -> String
@@ -106,19 +109,47 @@ type Request reqContent resContent decodeError req res =
   }
 
 class Eq content <= ContentType error content | content -> error where
-  responseFormat
-    :: forall reqContent decodeError req res
-     . Request reqContent content decodeError req res
-    -> ResponseFormat content
+  responseFormat :: Proxy content -> ResponseFormat content
   requestBody :: content -> RequestBody
+  fromRequestBody :: RequestBody -> Maybe content
   serializeContent :: content -> String
   serializeError :: Proxy content -> error -> String
+  caseArrayView :: forall r. (ArrayBuffer -> r) -> content -> Maybe r
+  caseBlob :: forall r. (Blob -> r) -> content -> Maybe r
+  caseDocument :: forall r. (Document -> r) -> content -> Maybe r
+  caseJson :: forall r. (Json -> r) -> content -> Maybe r
+  caseString :: forall r. (String -> r) -> content -> Maybe r
+  caseIgnore :: forall r. (Unit -> r) -> content -> Maybe r
+
+instance ContentType Void String where
+  responseFormat _ = Response.string
+  requestBody = RequestBody.string
+  fromRequestBody = case _ of
+    RequestBody.String s -> Just s
+    _ -> Nothing
+  serializeContent = identity
+  serializeError _ = absurd
+  caseArrayView = const $ const Nothing
+  caseBlob = const $ const Nothing
+  caseDocument = const $ const Nothing
+  caseJson = const $ const Nothing
+  caseString = map Just
+  caseIgnore = const $ const Nothing
 
 instance ContentType JsonDecodeError Json where
   responseFormat _ = Response.json
   requestBody = RequestBody.json
-  serializeContent = stringify
+  fromRequestBody = case _ of
+    RequestBody.Json j -> Just j
+    _ -> Nothing
+  serializeContent = stringifyWithIndent 2
   serializeError _ = printJsonDecodeError
+  caseArrayView = const $ const Nothing
+  caseBlob = const $ const Nothing
+  caseDocument = const $ const Nothing
+  caseJson = map Just
+  caseString = const $ const Nothing
+  caseIgnore = const $ const Nothing
 
 -- | Monads that can perform ajax requests. As stock instance for Aff calls
 -- | Affjax.request without modifying the request. Custom instances can be used
@@ -141,27 +172,20 @@ class Monad m <= MonadAjax api m where
     -> m (Either (AjaxError resDecodeError resContent) res)
 
 instance MonadAjax api Aff where
-  request _ req = runExceptT $ do
-    response <- withExceptT (mkError Nothing <<< ConnectingError)
-      $ ExceptT
-      $ Affjax.request aReq
-    except $ prepareResponse req.decode aReq response
+  request _ req =
+    prepareResponse req.decode aReq <$> Affjax.request aReq
     where
     aReq = prepareRequest req
-    mkError response description = AjaxError
-      { request: aReq
-      , response
-      , description
-      }
 
 prepareResponse
   :: forall decodeError content res
    . ContentType decodeError content
   => (content -> Either decodeError res)
   -> Affjax.Request content
-  -> Affjax.Response content
+  -> (Either Affjax.Error (Affjax.Response content))
   -> Either (AjaxError decodeError content) res
-prepareResponse decode req response = lmap mkError do
+prepareResponse decode req mResponse = lmap mkError do
+  response <- lmap ConnectingError mResponse
   let status = unwrap response.status
   if status < 200 || status >= 300 then
     Left UnexpectedHTTPStatus
@@ -170,7 +194,7 @@ prepareResponse decode req response = lmap mkError do
   where
   mkError description = AjaxError
     { request: req
-    , response: Just response
+    , response: hush mResponse
     , description
     }
 
@@ -193,7 +217,7 @@ prepareRequest req = Affjax.defaultRequest
       req.uri
   , headers = req.headers
   , content = requestBody <<< req.encode <$> req.content
-  , responseFormat = responseFormat req
+  , responseFormat = responseFormat (Proxy :: _ resContent)
   }
 
 segmentsToPathAbsolute :: Array String -> PathAbsolute
