@@ -3,7 +3,7 @@ module Servant.PureScript where
 import Prelude
 
 import Affjax (Error)
-import Affjax as Affjax
+import Affjax.Web as Affjax
 import Affjax.RequestBody (RequestBody(..))
 import Affjax.RequestBody as RequestBody
 import Affjax.RequestHeader (RequestHeader)

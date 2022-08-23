@@ -2,6 +2,8 @@
 , dependencies =
   [ "aff"
   , "affjax"
+  , "affjax-web"
+  , "arraybuffer-types"
   , "argonaut"
   , "arrays"
   , "bifunctors"
@@ -16,6 +18,8 @@
   , "transformers"
   , "tuples"
   , "uri"
+  , "web-dom"
+  , "web-file"
   ]
 , packages = ./packages.dhall
 , sources = [ "src/**/*.purs" ]
